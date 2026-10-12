@@ -1,4 +1,0 @@
-gradio
-edge-tts
-pydub
-static-ffmpeg
