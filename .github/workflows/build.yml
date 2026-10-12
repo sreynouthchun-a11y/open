@@ -21,12 +21,12 @@ jobs:
         python -m pip install --upgrade pip
         pip install edge-tts pydub static-ffmpeg pyinstaller
 
-    - name: Compile to EXE
+    - name: Compile to Single EXE
       run: |
-        pyinstaller --noconfirm --onedir --windowed --name "KhmerDubbingTool" --collect-all static_ffmpeg app.py
+        pyinstaller --noconfirm --onefile --windowed --name "KhmerDubbingTool" --collect-all static_ffmpeg app.py
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: KhmerDubbingTool-Windows
-        path: dist/KhmerDubbingTool/
+        name: KhmerDubbingTool-Standalone
+        path: dist/KhmerDubbingTool.exe
