@@ -3,14 +3,14 @@ import re
 import os
 import io
 import uuid
-import webbrowser
 import threading
+import subprocess
+import tkinter as tk
+from tkinter import scrolledtext, messagebox
 import edge_tts
 from pydub import AudioSegment
-import gradio as gr
 import static_ffmpeg
 
-# កំណត់ឱ្យកម្មវិធីស្គាល់ ffmpeg ស្វ័យប្រវត្តិលើកុំព្យូទ័រ
 static_ffmpeg.add_paths()
 
 VOICE_FEMALE = "km-KH-SreymomNeural"
@@ -56,8 +56,7 @@ async def process_single_segment(start_ms, end_ms, target_duration_ms, voice, te
     except Exception:
         return start_ms, None
 
-async def process_dubbing(script_text):
-    if not script_text.strip(): return None
+async def run_dubbing_async(script_text, update_status_fn):
     lines = script_text.strip().split('\n')
     tasks = []
     max_video_end_ms = 0
@@ -85,31 +84,83 @@ async def process_dubbing(script_text):
         if clean_text:
             tasks.append(process_single_segment(start_ms, end_ms, target_duration_ms, voice, clean_text))
 
-    if not tasks: return None
+    if not tasks:
+        return None
+
+    update_status_fn("កំពុងទាញសំឡេង Piseth & Sreymom ពី Microsoft...")
     results = await asyncio.gather(*tasks)
 
+    update_status_fn("កំពុងផ្គុំសំឡេងបញ្ចូលគ្នា (Rendering MP3)...")
     master_audio = AudioSegment.silent(duration=max_video_end_ms)
     for start_ms, speech_segment in results:
         if speech_segment:
             master_audio = master_audio.overlay(speech_segment, position=start_ms)
 
     master_audio = master_audio[:max_video_end_ms]
-    output_file = f"dubbed_{uuid.uuid4().hex[:8]}.mp3"
+
+    output_dir = os.path.join(os.path.expanduser("~"), "Downloads")
+    output_file = os.path.join(output_dir, f"dubbed_{uuid.uuid4().hex[:6]}.mp3")
     master_audio.export(output_file, format="mp3")
+
     return output_file
 
-custom_css = "footer {visibility: hidden}"
+# --- ផ្ទាំងកម្មវិធី Desktop UI (Tkinter) ---
+class DubbingApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("AI Video Dubbing Tool (Piseth & Sreymom)")
+        self.root.geometry("620x520")
+        self.root.resizable(False, False)
 
-with gr.Blocks(title="AI Dubbing PC Tool", css=custom_css) as demo:
-    gr.Markdown("## 🎙️ AI Video Dubbing Tool (Piseth & Sreymom)")
-    script_input = gr.Textbox(label="Paste Gemini Script ទីនេះ", lines=12)
-    generate_btn = gr.Button("🚀 Generate Full Dubbed Audio (MP3)", variant="primary")
-    audio_output = gr.Audio(label="File សំឡេង MP3", type="filepath")
-    generate_btn.click(fn=process_dubbing, inputs=[script_input], outputs=[audio_output])
+        title_label = tk.Label(root, text="🎙️ Khmer AI Dubbing Desktop Tool", font=("Segoe UI", 14, "bold"))
+        title_label.pack(pady=10)
 
-def open_browser():
-    webbrowser.open("http://127.0.0.1:7860")
+        inst_label = tk.Label(root, text="សូមបិទភ្ជាប់ (Paste) Script Gemini នៅទីនេះ៖", font=("Segoe UI", 10))
+        inst_label.pack(anchor="w", padx=20)
+
+        self.text_input = scrolledtext.ScrolledText(root, width=68, height=15, font=("Segoe UI", 10))
+        self.text_input.pack(padx=20, pady=5)
+
+        self.status_label = tk.Label(root, text="រង់ចាំបញ្ចូល Script...", font=("Segoe UI", 10), fg="gray")
+        self.status_label.pack(pady=5)
+
+        self.btn_generate = tk.Button(
+            root, text="🚀 ចាប់ផ្ដើម Generate MP3", font=("Segoe UI", 11, "bold"),
+            bg="#0078D7", fg="white", padx=15, pady=5, command=self.start_processing
+        )
+        self.btn_generate.pack(pady=10)
+
+    def update_status(self, text, color="black"):
+        self.status_label.config(text=text, fg=color)
+
+    def start_processing(self):
+        script_text = self.text_input.get("1.0", tk.END).strip()
+        if not script_text:
+            messagebox.showwarning("ការជូនដំណឹង", "សូមបញ្ចូល Script ជាមុនសិន!")
+            return
+
+        self.btn_generate.config(state=tk.DISABLED)
+        self.update_status("កំពុងចាប់ផ្ដើមដំណើរការ...", "blue")
+        threading.Thread(target=self.run_thread, args=(script_text,), daemon=True).start()
+
+    def run_thread(self, script_text):
+        try:
+            output_path = asyncio.run(run_dubbing_async(script_text, self.update_status))
+            if output_path and os.path.exists(output_path):
+                self.update_status("✅ ផលិតសំឡេងរួចរាល់!", "green")
+                # បើក Folder Downloads បង្ហាញ File ជូនភ្ញៀវស្វ័យប្រវត្តិ
+                subprocess.Popen(f'explorer /select,"{os.path.normpath(output_path)}"')
+                messagebox.showinfo("ជោគជ័យ", f"File MP3 ត្រូវបានរក្សាទុកក្នុង Downloads:\n{os.path.basename(output_path)}")
+            else:
+                self.update_status("❌ បរាជ័យ៖ Script មិនត្រូវទម្រង់ម៉ោង", "red")
+                messagebox.showerror("Error", "មិនអាចអានទម្រង់ម៉ោងក្នុង Script បានទេ។")
+        except Exception as e:
+            self.update_status(f"Error: {e}", "red")
+            messagebox.showerror("Error", str(e))
+        finally:
+            self.btn_generate.config(state=tk.NORMAL)
 
 if __name__ == "__main__":
-    threading.Timer(1.5, open_browser).start()
-    demo.launch(server_name="127.0.0.1", server_port=7860, inbrowser=False)
+    app_root = tk.Tk()
+    app = DubbingApp(app_root)
+    app_root.mainloop()
